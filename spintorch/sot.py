@@ -18,7 +18,7 @@ class SOT(nn.Module):
     T_SOT = 20e-9   # effective SOT thickness (m)
     J_SOT = -4e8    # spin current density (A/m^2)
     sigma = [0.0,1.0,0.0] # spin polarization vector
-    active = True
+    active = False
     
     def __init__(self, dim: tuple):
         super().__init__()
