@@ -59,7 +59,7 @@ class MMSolver(nn.Module):
         outputs = []
         N = int(np.sqrt(signal.size()[1])) # number of stages 
         for stage, sig in enumerate(signal.chunk(N, dim=1)):
-            output, m = checkpoint(self.run_stage, m, B_ext, Msat, sig)
+            output, m = checkpoint(self.run_stage, m, B_ext, Msat, sig, use_reentrant=False)
             outputs.append(output)
         return outputs
         
@@ -70,9 +70,9 @@ class MMSolver(nn.Module):
         for sig in signal.split(1,dim=1):
             B_ext = self.inject_sources(B_ext, sig)
             # Propagate the fields (with checkpointing to save memory)
-            m = checkpoint(self.rk4_step_LLG, m, B_ext, Msat)
+            m = checkpoint(self.rk4_step_LLG, m, B_ext, Msat, use_reentrant=False)
             # Measure the outputs (checkpointing helps here as well)
-            outputs = checkpoint(self.measure_probes, m, Msat, outputs)
+            outputs = checkpoint(self.measure_probes, m, Msat, outputs, use_reentrant=False)
             if self.retain_history and self.fwd:
                 self.m_history.append(m.detach().cpu())
         return outputs, m
