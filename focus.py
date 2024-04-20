@@ -95,6 +95,7 @@ for epoch in range(epoch_init+1, 10):
     loss_iter.append(loss.item())  # store loss values
     spintorch.plot.plot_loss(loss_iter, plotdir)
     stat_cuda('after forward')
+    toc()
     loss.backward()
     optimizer.step()
     stat_cuda('after backward')

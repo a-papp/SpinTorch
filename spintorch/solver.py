@@ -25,7 +25,6 @@ class MMSolver(nn.Module):
 
         self.register_buffer("dt", tensor(dt))  # timestep (s)
         self.input = None  # input signal
-        self.register_buffer("B_ext0", tensor(0))  # input signal
 
         self.geom = geometry
         self.sources = nn.ModuleList(sources)
@@ -35,6 +34,8 @@ class MMSolver(nn.Module):
         self.Alpha = Damping(self.geom.dim)
         self.torque_SOT = SOT(self.geom.dim)
         SOT.gamma_LL = self.gamma_LL
+
+        self.register_buffer("B_ext0", self.geom.B)  # input signal
 
         m0 = zeros((1, 3,) + self.geom.dim)
         m0[:, 1,] =  1     # set initial magnetization in y direction
@@ -55,9 +56,15 @@ class MMSolver(nn.Module):
         self.input = None
         self.relax(Msat) # relax magnetization and store in m0 (no gradients)
         self.input = input
-        outputs = self.run(self.m0, Msat) # run the simulation
+        # outputs = self.run(self.m0, Msat) # run the simulation
+
+        t_save = torch.arange(0, 601, device=self.dt.device)*self.dt
+        outputs = self.odeint_adjoint_step(self.m0, t_save, Msat)
+        # print(len(outputs))
+        # print(outputs[0].size())
+        # exit()
         self.fwd = False
-        return cat(outputs, dim=1)
+        return outputs
 
     def run(self, m, Msat):
         """Run the simulation in multiple stages for checkpointing"""
@@ -71,7 +78,7 @@ class MMSolver(nn.Module):
             n_end = min((stg+1)*N,timesteps)
             output, m = checkpoint(self.run_stage, m, Msat, n_start, n_end, use_reentrant=False)
             outputs.append(output)
-        return outputs
+        return cat(outputs, dim=1)
         
     def run_stage(self, m, Msat, n_start,n_end):
         """Run a subset of timesteps (needed for 2nd level checkpointing)"""
@@ -106,14 +113,24 @@ class MMSolver(nn.Module):
             for n in range(self.relax_timesteps):
                 self.m0 = self.rk4_step(0, self.m0, Msat, relax=True)
 
-    def odeint_adjoint_step(self, m, t_save, Msat, signal, relax=False):
+    def odeint_adjoint_step(self, m, t_save, Msat, relax=False):
         # Define update function     
         def update_fn(tg,m):
             return self.step_fn(tg/self.gamma_LL,m,Msat,relax)
 
         # Call odeint_adjoint with dopri5
         out = odeint_adjoint(update_fn,m,t_save*self.gamma_LL,adjoint_params=self.parameters(),method="dopri5",atol=1e-6)
-        return out
+        
+        print(out.element_size())
+        print(out.nelement())
+        print(out.nelement()*out.element_size())
+        print("bytes")
+        outputs = empty(0,device=self.dt.device)
+        for i, m in enumerate(out):
+            outputs = self.measure_probes(m, Msat, outputs)
+            if self.retain_history and self.fwd:
+                self.m_history.append(m.detach().cpu())
+        return outputs
 
     
     def rk4_step(self, t, m, Msat, relax=False):
