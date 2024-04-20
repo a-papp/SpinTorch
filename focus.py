@@ -59,8 +59,8 @@ model.to(dev)   # sending model to GPU/CPU
 
 
 '''Define the source signal and output goal'''
-t = torch.arange(0, timesteps*dt, dt, device=dev).unsqueeze(0).unsqueeze(2) # time vector
-X = Bt*torch.sin(2*np.pi*f1*t)  # sinusoid signal at f1 frequency, Bt amplitude
+# t = torch.arange(0, timesteps*dt, dt, device=dev).unsqueeze(0).unsqueeze(2) # time vector
+X = lambda t: Bt*torch.sin(2*np.pi*f1*t)  # sinusoid signal at f1 frequency, Bt amplitude
 
 INPUTS = X  # here we could cat multiple inputs
 OUTPUTS = torch.tensor([int(Np/2)]).to(dev) # desired output
