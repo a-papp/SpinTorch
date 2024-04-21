@@ -20,12 +20,13 @@ class MMSolver(nn.Module):
     gamma_LL = 1.7595e11    # gyromagnetic ratio (rad/Ts)
     relax_timesteps = 100
     retain_history = False
-    def __init__(self, geometry, dt: float, sources=[], probes=[]):
+    def __init__(self, geometry, dt: float, sources=[], probes=[], method='adjoint'):
         super().__init__()
 
         self.register_buffer("dt", tensor(dt))  # timestep (s)
         self.input = None  # input signal
 
+        self.method = method
         self.geom = geometry
         self.sources = nn.ModuleList(sources)
         self.probes = nn.ModuleList(probes)
@@ -57,29 +58,33 @@ class MMSolver(nn.Module):
         self.input = None
         self.relax() # relax magnetization and store in m0 (no gradients)
         self.input = input
-        # outputs = self.run(self.m0) # run the simulation
 
-        t_save = torch.arange(0, 601, device=self.dt.device)*self.dt
-        outputs = self.odeint_adjoint_step(self.m0, t_save)
-        # print(len(outputs))
-        # print(outputs[0].size())
-        # exit()
+        outputs = self.run(self.m0) # run the simulation
+
         self.fwd = False
         return outputs
 
     def run(self, m):
         """Run the simulation in multiple stages for checkpointing"""
         outputs = []
-        timesteps = 600
-        N = ceil(np.sqrt(timesteps)) # number of stages 
-        for stg in range(0, N):
-            n_start = stg*N
-            if n_start >= timesteps:
-                break
-            n_end = min((stg+1)*N,timesteps)
-            output, m = checkpoint(self.run_stage, m, n_start, n_end, use_reentrant=False)
-            outputs.append(output)
-        return cat(outputs, dim=1)
+        if self.method == 'adjoint':
+            t_save = torch.arange(0, 601, device=self.dt.device)*self.dt
+            outputs = self.odeint_adjoint_step(self.m0, t_save)
+        elif self.method == 'RK4':
+            timesteps = 600
+            N = ceil(np.sqrt(timesteps)) # number of stages 
+            for stg in range(0, N):
+                n_start = stg*N
+                if n_start >= timesteps:
+                    break
+                n_end = min((stg+1)*N,timesteps)
+                output, m = checkpoint(self.run_stage, m, n_start, n_end, use_reentrant=False)
+                outputs.append(output)
+            outputs = cat(outputs, dim=1)
+        else:
+            print("Error: Unknown method ",self.method)
+
+        return outputs
         
     def run_stage(self, m, n_start,n_end):
         """Run a subset of timesteps (needed for 2nd level checkpointing)"""

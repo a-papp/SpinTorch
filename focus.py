@@ -47,7 +47,7 @@ probes = []
 Np = 19  # number of probes
 for p in range(Np):
     probes.append(spintorch.WaveIntensityProbeDisk(nx-15, int(ny*(p+1)/(Np+1)), 2))
-model = spintorch.MMSolver(geom, dt, [src], probes)
+model = spintorch.MMSolver(geom, dt, [src], probes,'RK4')
 
 dev = torch.device('cuda')  # 'cuda' or 'cpu'
 print('Running on', dev)
