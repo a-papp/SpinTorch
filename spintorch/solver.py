@@ -36,6 +36,7 @@ class MMSolver(nn.Module):
         SOT.gamma_LL = self.gamma_LL
 
         self.register_buffer("B_ext0", self.geom.B)  # input signal
+        self.register_buffer("Msat", self.geom() )  # initial Ms
 
         m0 = zeros((1, 3,) + self.geom.dim)
         m0[:, 1,] =  1     # set initial magnetization in y direction
@@ -47,26 +48,26 @@ class MMSolver(nn.Module):
         self.m_history = []
         self.fwd = True
         if isinstance(self.geom, WaveGeometryMs):
-            Msat = self.geom()
+            self.Msat = self.geom()
             self.B_ext0 = self.geom.B
         else:
             self.B_ext0 = self.geom()
-            Msat = self.geom.Ms
+            self.Msat = self.geom.Ms
         
         self.input = None
-        self.relax(Msat) # relax magnetization and store in m0 (no gradients)
+        self.relax() # relax magnetization and store in m0 (no gradients)
         self.input = input
-        # outputs = self.run(self.m0, Msat) # run the simulation
+        # outputs = self.run(self.m0) # run the simulation
 
         t_save = torch.arange(0, 601, device=self.dt.device)*self.dt
-        outputs = self.odeint_adjoint_step(self.m0, t_save, Msat)
+        outputs = self.odeint_adjoint_step(self.m0, t_save)
         # print(len(outputs))
         # print(outputs[0].size())
         # exit()
         self.fwd = False
         return outputs
 
-    def run(self, m, Msat):
+    def run(self, m):
         """Run the simulation in multiple stages for checkpointing"""
         outputs = []
         timesteps = 600
@@ -76,19 +77,19 @@ class MMSolver(nn.Module):
             if n_start >= timesteps:
                 break
             n_end = min((stg+1)*N,timesteps)
-            output, m = checkpoint(self.run_stage, m, Msat, n_start, n_end, use_reentrant=False)
+            output, m = checkpoint(self.run_stage, m, n_start, n_end, use_reentrant=False)
             outputs.append(output)
         return cat(outputs, dim=1)
         
-    def run_stage(self, m, Msat, n_start,n_end):
+    def run_stage(self, m, n_start,n_end):
         """Run a subset of timesteps (needed for 2nd level checkpointing)"""
         outputs = empty(0,device=self.dt.device)
         # Loop through the signal 
         for n in range(n_start,n_end):
             # Propagate the fields (with checkpointing to save memory)
-            m = checkpoint(self.rk4_step, n*self.dt, m, Msat, use_reentrant=False)
+            m = checkpoint(self.rk4_step, n*self.dt, m, use_reentrant=False)
             # Measure the outputs (checkpointing helps here as well)
-            outputs = checkpoint(self.measure_probes, m, Msat, outputs, use_reentrant=False)
+            outputs = checkpoint(self.measure_probes, m, outputs, use_reentrant=False)
             if self.retain_history and self.fwd:
                 self.m_history.append(m.detach().cpu())
         return outputs, m
@@ -99,49 +100,49 @@ class MMSolver(nn.Module):
             B_ext = src(self.B_ext0, sig)
         return B_ext
 
-    def measure_probes(self, m, Msat, outputs): 
+    def measure_probes(self, m, outputs): 
         """Extract outputs and concatenate to previous values"""
         probe_values = []
         for probe in self.probes:
-            probe_values.append(probe((m-self.m0)*Msat))
+            probe_values.append(probe((m-self.m0)*self.Msat))
         outputs = cat([outputs, cat(probe_values).unsqueeze(0).unsqueeze(0)], dim=1)
         return outputs
         
-    def relax(self, Msat): 
+    def relax(self): 
         """Run the solver with high damping to relax magnetization"""
         with torch.no_grad():
             for n in range(self.relax_timesteps):
-                self.m0 = self.rk4_step(0, self.m0, Msat, relax=True)
+                self.m0 = self.rk4_step(0, self.m0, relax=True)
 
-    def odeint_adjoint_step(self, m, t_save, Msat, relax=False):
+    def odeint_adjoint_step(self, m, t_save, relax=False):
         # Define update function     
         def update_fn(tg,m):
-            return self.step_fn(tg/self.gamma_LL,m,Msat,relax)
+            return self.step_fn(tg/self.gamma_LL,m,relax)
 
         # Call odeint_adjoint with dopri5
         out = odeint_adjoint(update_fn,m,t_save*self.gamma_LL,adjoint_params=self.parameters(),method="dopri5",atol=1e-6)
         outputs = empty(0,device=self.dt.device)
         for i, m in enumerate(out):
             # checkpointing is important here
-            outputs = checkpoint(self.measure_probes, m, Msat, outputs, use_reentrant=False)
+            outputs = checkpoint(self.measure_probes, m, outputs, use_reentrant=False)
             if self.retain_history and self.fwd:
                 self.m_history.append(m.detach().cpu())
         return outputs
 
     
-    def rk4_step(self, t, m, Msat, relax=False):
+    def rk4_step(self, t, m, relax=False):
         """Implement a 4th-order Runge-Kutta solver"""
         dt = self.dt
         h  = self.gamma_LL * dt    # this time unit is closer to 1
-        k1 = self.step_fn(t,        m,          Msat, relax)
-        k2 = self.step_fn(t + dt/2, m + h*k1/2, Msat, relax)
-        k3 = self.step_fn(t + dt/2, m + h*k2/2, Msat, relax)
-        k4 = self.step_fn(t + dt,   m + h*k3,   Msat, relax)
+        k1 = self.step_fn(t,        m,          relax)
+        k2 = self.step_fn(t + dt/2, m + h*k1/2, relax)
+        k3 = self.step_fn(t + dt/2, m + h*k2/2, relax)
+        k4 = self.step_fn(t + dt,   m + h*k3,   relax)
         return (m + h/6 * ((k1 + 2*k2) + (2*k3 + k4)))
     
-    def step_fn(self,t,m,Msat,relax):
+    def step_fn(self,t,m,relax):
         Bext = self.inject_sources(self.signal(t))
-        return self.torque_LLG(m, Bext, Msat, relax)  
+        return self.torque_LLG(m, Bext, self.Msat, relax)  
           
     def signal(self,t):
         if self.input is None:
