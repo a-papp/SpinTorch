@@ -6,10 +6,6 @@ import numpy as np
 from spintorch.utils import tic, toc, stat_cuda
 from spintorch.plot import wave_integrated, wave_snapshot
 
-import warnings
-warnings.filterwarnings("ignore", message=".*Casting complex values to real.*")
-
-
 """Parameters"""
 dx = 50e-9      # discretization (m)
 dy = 50e-9      # discretization (m)
@@ -99,8 +95,8 @@ for epoch in range(epoch_init+1, 10):
     loss.backward()
     optimizer.step()
     stat_cuda('after backward')
+    toc()
     print("Epoch finished: %d -- Loss: %.6f" % (epoch, loss))
-    toc()   
 
     '''Save model checkpoint'''
     torch.save({
@@ -118,6 +114,3 @@ for epoch in range(epoch_init+1, 10):
             wave_snapshot(model, mz[timesteps-1], (plotdir+'snapshot_time%d_epoch%d.png' % (timesteps,epoch)),r"$m_z$")
             wave_snapshot(model, mz[int(timesteps/2)-1], (plotdir+'snapshot_time%d_epoch%d.png' % (int(timesteps/2),epoch)),r"$m_z$")
             wave_integrated(model, mz, (plotdir+'integrated_epoch%d.png' % (epoch)))
-
-
-  

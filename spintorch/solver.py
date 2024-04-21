@@ -120,14 +120,10 @@ class MMSolver(nn.Module):
 
         # Call odeint_adjoint with dopri5
         out = odeint_adjoint(update_fn,m,t_save*self.gamma_LL,adjoint_params=self.parameters(),method="dopri5",atol=1e-6)
-        
-        print(out.element_size())
-        print(out.nelement())
-        print(out.nelement()*out.element_size())
-        print("bytes")
         outputs = empty(0,device=self.dt.device)
         for i, m in enumerate(out):
-            outputs = self.measure_probes(m, Msat, outputs)
+            # checkpointing is important here
+            outputs = checkpoint(self.measure_probes, m, Msat, outputs, use_reentrant=False)
             if self.retain_history and self.fwd:
                 self.m_history.append(m.detach().cpu())
         return outputs
@@ -141,11 +137,6 @@ class MMSolver(nn.Module):
         k2 = self.step_fn(t + dt/2, m + h*k1/2, Msat, relax)
         k3 = self.step_fn(t + dt/2, m + h*k2/2, Msat, relax)
         k4 = self.step_fn(t + dt,   m + h*k3,   Msat, relax)
-        
-        # k1 = self.torque_LLG(m, B_ext, Msat, relax)
-        # k2 = self.torque_LLG(m + h*k1/2, B_ext, Msat, relax)
-        # k3 = self.torque_LLG(m + h*k2/2, B_ext, Msat, relax)
-        # k4 = self.torque_LLG(m + h*k3, B_ext, Msat, relax)
         return (m + h/6 * ((k1 + 2*k2) + (2*k3 + k4)))
     
     def step_fn(self,t,m,Msat,relax):
